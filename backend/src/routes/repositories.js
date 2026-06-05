@@ -18,16 +18,22 @@ router.get("/", authenticateToken, async (req, res) => {
   }
 });
 
+const normalizeUrl = (url) => {
+  if (!url) return url;
+  return url.trim().toLowerCase().replace(/\.git$/, "").replace(/\/$/, "");
+};
+
 // Register a repository for the logged-in user
 router.post("/", authenticateToken, async (req, res) => {
   const { name, github_url } = req.body;
   if (!name || !github_url) {
     return res.status(400).json({ error: "name and github_url are required" });
   }
+  const normalizedUrl = normalizeUrl(github_url);
   try {
     const result = await pool.query(
       "INSERT INTO repositories (name, github_url, user_id) VALUES ($1, $2, $3) RETURNING *",
-      [name, github_url, req.user.id]
+      [name, normalizedUrl, req.user.id]
     );
     res.status(201).json(result.rows[0]);
   } catch (error) {

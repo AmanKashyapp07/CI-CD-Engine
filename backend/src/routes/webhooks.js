@@ -59,12 +59,19 @@ router.post("/github", verifyGithubSignature, async (req, res) => {
 
     const repoName = repository.name;
     const githubUrl = repository.clone_url;
+    
+    const normalizeUrl = (url) => {
+      if (!url) return url;
+      return url.trim().toLowerCase().replace(/\.git$/, "").replace(/\/$/, "");
+    };
+    
+    const normalizedUrl = normalizeUrl(githubUrl);
 
     // 1. Find or create the repository in the database
     let repoId;
     const repoResult = await pool.query(
       "SELECT id FROM repositories WHERE github_url = $1",
-      [githubUrl]
+      [normalizedUrl]
     );
 
     if (repoResult.rows.length > 0) {
@@ -72,7 +79,7 @@ router.post("/github", verifyGithubSignature, async (req, res) => {
     } else {
       const insertRepoResult = await pool.query(
         "INSERT INTO repositories (name, github_url) VALUES ($1, $2) RETURNING id",
-        [repoName, githubUrl]
+        [repoName, normalizedUrl]
       );
       repoId = insertRepoResult.rows[0].id;
     }
