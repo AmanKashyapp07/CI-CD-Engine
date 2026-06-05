@@ -411,3 +411,105 @@ body {
     opacity: 1;
   }
 }
+
+/* GitHub OAuth Layout & Elements */
+.login-layout {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.login-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  padding: 40px;
+  max-width: 500px;
+  text-align: center;
+  box-shadow: var(--shadow-premium);
+  backdrop-filter: blur(10px);
+  margin-top: 40px;
+}
+
+.login-panel h2 {
+  font-size: 24px;
+  margin-bottom: 15px;
+  color: #fff;
+}
+
+.login-panel p {
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.6;
+  margin-bottom: 30px;
+}
+
+.btn-github {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  font-size: 16px;
+  background: #24292e;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.btn-github:hover {
+  background: #2f363d;
+}
+
+.github-icon-svg {
+  display: flex;
+  align-items: center;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.user-profile {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  padding: 6px 12px;
+  border-radius: 99px;
+  border: 1px solid var(--panel-border);
+}
+
+.user-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid var(--primary);
+}
+
+.username {
+  font-size: 14px;
+  font-weight: 600;
+  color: #fff;
+}
+
+.btn-logout {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 8px;
+  border-radius: 4px;
+  transition: all 0.2s ease;
+}
+
+.btn-logout:hover {
+  color: var(--danger);
+  background: rgba(239, 68, 68, 0.1);
+}
+

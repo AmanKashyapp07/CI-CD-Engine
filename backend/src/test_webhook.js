@@ -6,10 +6,10 @@ const webhookUrl = "http://localhost:5001/api/webhooks/github";
 const secret = process.env.GITHUB_WEBHOOK_SECRET || ""; // Optional secret matching .env
 
 const payload = {
-  after: "87c9bc3da38f12a80693aef4c78d59ad02a6c1e5", // Fake commit hash
+  after: "87c9bc3da38f12a80693aef4c78d59ad02a6c1e3", // Fake commit hash
   repository: {
-    name: "test-auto-build-app",
-    clone_url: "https://github.com/amankashyap/test-auto-build-app.git",
+    name: "test-auto-build-app-2",
+    clone_url: "https://github.com/amankashyap/test-auto-build-app-2.git",
   },
 }; // this payload contains after and repository fields which are required for the webhook handler to process the event, after means the latest commit hash and repository contains the name and clone_url of the repository which are used to trigger the build process. commit hash is fake and does not need to exist in the actual repository since this is just a test payload to verify that the webhook handler is correctly receiving and processing the event. actually commit hash means the latest commit hash of the branch which is being pushed to, but since this is just a test payload we can use any fake commit hash to trigger the webhook handler and verify that it is correctly processing the event and triggering the build process.
 
@@ -24,11 +24,11 @@ const headers = {
 if (secret) {
   const hmac = crypto.createHmac("sha256", secret); // 
   const digest = "sha256=" + hmac.update(payloadString).digest("hex");
-  headers["X-Hub-Signature-256"] = digest;
+  headers["X-Hub-Signature-256"] = digest; // attach the calculated signature in the headers if secret is present, otherwise send without signature
   console.log("Calculated signature:", digest);
 } else {
   console.log("No GITHUB_WEBHOOK_SECRET env variable. Sending signature-less payload.");
-}
+} // if secret is not set, then the payload will be sent without signature and the webhook handler should handle this case gracefully by checking if the signature header is present and valid before processing the event. this allows us to test both cases - with and without signature - to ensure that the webhook handler is robust and can handle different scenarios correctly. it is important because in real scenarios, the secret may not always be set or may be misconfigured, and we want to ensure that our webhook handler can still function correctly without crashing or throwing errors when the signature is missing or invalid.  
 
 console.log("Sending mock push webhook event to:", webhookUrl);
 
