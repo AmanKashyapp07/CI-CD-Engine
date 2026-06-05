@@ -1,6 +1,7 @@
 const express = require("express");
 const crypto = require("crypto");
 const pool = require("../db");
+const buildQueue = require("../queue");
 
 const router = express.Router();
 
@@ -97,6 +98,13 @@ router.post("/github", verifyGithubSignature, async (req, res) => {
     );
 
     const buildId = buildResult.rows[0].id;
+
+    // Add job to the queue
+    await buildQueue.add("run-build", {
+      buildId: buildId,
+      repoUrl: normalizedUrl,
+      commitHash: commitHash
+    });
 
     // 4. Return 202 Accepted immediately with build info
     res.status(202).json({
