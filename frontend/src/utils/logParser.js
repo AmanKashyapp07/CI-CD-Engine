@@ -49,55 +49,99 @@ export function parseLogsIntoSteps(rawLogs, buildStatus) {
   const cleanLogs = stripAnsi(rawLogs);
   const lines = cleanLogs.split('\n');
 
-  const steps = [
-    { id: 'setup_workspace', name: 'Setup Workspace', lines: [], status: 'pending', startTime: null, endTime: null },
-    { id: 'env_setup', name: 'Environment Detection', lines: [], status: 'pending', startTime: null, endTime: null },
-    { id: 'pull_image', name: 'Pulling Base Layer', lines: [], status: 'pending', startTime: null, endTime: null },
-    { id: 'run_tests', name: 'Running Pipeline Tests', lines: [], status: 'pending', startTime: null, endTime: null },
-    { id: 'harvest_artifacts', name: 'Harvesting Artifacts', lines: [], status: 'pending', startTime: null, endTime: null },
-    { id: 'auto_revert', name: 'Auto-Revert Status', lines: [], status: 'pending', startTime: null, endTime: null },
-    { id: 'cleanup', name: 'Teardown & Cleanup', lines: [], status: 'pending', startTime: null, endTime: null }
-  ];
+  // 1. Initialize permanent system steps
+  const systemSteps = {
+    setup_workspace: { id: 'setup_workspace', name: 'Setup Workspace', lines: [], status: 'pending', startTime: null, endTime: null },
+    env_detect: { id: 'env_detect', name: 'Environment Detection', lines: [], status: 'pending', startTime: null, endTime: null },
+  };
 
-  let currentStepId = 'setup_workspace';
-  let hasSeenContainerStart = false;
+  const dynamicStages = {};
 
-  for (let line of lines) {
+  const systemEndSteps = {
+    artifacts: { id: 'artifacts', name: 'Harvesting Artifacts', lines: [], status: 'pending', startTime: null, endTime: null },
+    cleanup: { id: 'cleanup', name: 'Teardown & Cleanup', lines: [], status: 'pending', startTime: null, endTime: null }
+  };
+
+  let lastActiveStage = null;
+
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
-    // Detect step transition keywords
-    if (trimmed.includes('Detecting project language') || trimmed.includes('Detected context:')) {
-      currentStepId = 'env_setup';
-    } else if (trimmed.includes('Pulling base layer image') || trimmed.includes('Base layer cached successfully')) {
-      currentStepId = 'pull_image';
-    } else if (trimmed.includes('Configuring runtime container context')) {
-      currentStepId = 'pull_image';
-      hasSeenContainerStart = true;
-    } else if (hasSeenContainerStart && currentStepId === 'pull_image' && !trimmed.includes('[ENGINE]')) {
-      currentStepId = 'run_tests';
-    } else if (trimmed.includes('Container execution exited with code')) {
-      // Append the exit code line to run_tests so users see the container exit status
-      const runStep = steps.find(s => s.id === 'run_tests');
-      if (runStep) runStep.lines.push(line);
-      currentStepId = 'harvest_artifacts';
-      continue;
-    } else if ((trimmed.includes('Captured') && trimmed.includes('build artifact')) || trimmed.includes('[ARTIFACTS]')) {
-      currentStepId = 'harvest_artifacts';
-    } else if (trimmed.includes('[REVERT]')) {
-      currentStepId = 'auto_revert';
-    } else if (trimmed.includes('Pruning operational file tree') || trimmed.includes('fully executed and finished context routines')) {
-      currentStepId = 'cleanup';
+    // Detect stage logs based on bracket prefix, e.g. "[SETUP] added packages" or "[TEST] PASS"
+    const stagePrefixRegex = /^(?:\[\d{2}:\d{2}:\d{2}\]\s+)?\[([A-Z0-9_-]+)\]\s+(.*)$/;
+    const match = trimmed.match(stagePrefixRegex);
+
+    if (match) {
+      const stageName = match[1].toLowerCase();
+      const content = match[2];
+
+      // Exclude system names
+      if (stageName !== 'worker' && stageName !== 'engine' && stageName !== 'revert') {
+        if (!dynamicStages[stageName]) {
+          dynamicStages[stageName] = {
+            id: `stage_${stageName}`,
+            name: `Stage: ${stageName.toUpperCase()}`,
+            lines: [],
+            status: 'pending',
+            startTime: null,
+            endTime: null
+          };
+        }
+        dynamicStages[stageName].lines.push(line);
+        lastActiveStage = stageName;
+        continue;
+      }
     }
 
-    const step = steps.find(s => s.id === currentStepId);
-    if (step) {
-      step.lines.push(line);
+    // Engine/Worker log lines
+    if (trimmed.includes('Build status forced to RUNNING') || trimmed.includes('Created workspace path') || trimmed.includes('Repository cloned successfully') || trimmed.includes('Target commit successfully isolated')) {
+      systemSteps.setup_workspace.lines.push(line);
+    } else if (trimmed.includes('Detecting project language') || trimmed.includes('Detected context:') || trimmed.includes('dependency caching') || trimmed.includes('caching strategy') || trimmed.includes('Cache hit') || trimmed.includes('Cache miss')) {
+      systemSteps.env_detect.lines.push(line);
+    } else if (trimmed.includes('Preparing stage') || trimmed.includes('Launching stage') || (trimmed.includes('Stage') && trimmed.includes('execution exited')) || trimmed.includes('runtime session active')) {
+      const stageMatch = trimmed.match(/stage\s+([A-Z0-9_-]+)/i);
+      if (stageMatch) {
+        const stageName = stageMatch[1].toLowerCase();
+        if (!dynamicStages[stageName]) {
+          dynamicStages[stageName] = {
+            id: `stage_${stageName}`,
+            name: `Stage: ${stageName.toUpperCase()}`,
+            lines: [],
+            status: 'pending',
+            startTime: null,
+            endTime: null
+          };
+        }
+        dynamicStages[stageName].lines.push(line);
+      } else if (lastActiveStage && dynamicStages[lastActiveStage]) {
+        dynamicStages[lastActiveStage].lines.push(line);
+      } else {
+        systemSteps.env_detect.lines.push(line);
+      }
+    } else if ((trimmed.includes('Captured') && trimmed.includes('build artifact')) || trimmed.includes('[ARTIFACTS]') || trimmed.includes('Gathering build artifacts')) {
+      systemEndSteps.artifacts.lines.push(line);
+    } else if (trimmed.includes('Pruning operational file tree') || trimmed.includes('fully executed and finished context') || trimmed.includes('Pruned operational') || trimmed.includes('Teardown')) {
+      systemEndSteps.cleanup.lines.push(line);
+    } else {
+      if (lastActiveStage && dynamicStages[lastActiveStage]) {
+        dynamicStages[lastActiveStage].lines.push(line);
+      } else {
+        systemSteps.env_detect.lines.push(line);
+      }
     }
   }
 
+  // Combine steps in correct execution order
+  const steps = [
+    systemSteps.setup_workspace,
+    systemSteps.env_detect,
+    ...Object.values(dynamicStages),
+    systemEndSteps.artifacts,
+    systemEndSteps.cleanup
+  ];
+
   const timeRegex = /\[(\d{2}:\d{2}:\d{2})\]/;
-  
   const getFirstTimestamp = (stepLines) => {
     for (const l of stepLines) {
       const match = l.match(timeRegex);
@@ -114,31 +158,21 @@ export function parseLogsIntoSteps(rawLogs, buildStatus) {
     return null;
   };
 
-  // Initial assign of timestamps
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
     if (step.lines.length > 0) {
       step.startTime = getFirstTimestamp(step.lines);
       step.endTime = getLastTimestamp(step.lines);
-      
-      if (!step.startTime && i > 0) {
-        step.startTime = steps[i - 1].endTime || steps[i - 1].startTime;
-      }
+    }
+    
+    if (!step.startTime && i > 0) {
+      step.startTime = steps[i - 1].endTime || steps[i - 1].startTime;
     }
   }
 
-  // Refine start/end times between consecutive steps to fill gaps
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    if (step.lines.length === 0) continue;
-
-    if (step.id === 'run_tests') {
-      const pullStep = steps.find(s => s.id === 'pull_image');
-      if (pullStep && pullStep.endTime) {
-        step.startTime = pullStep.endTime;
-      }
-    }
-
+    
     if (!step.endTime) {
       for (let j = i + 1; j < steps.length; j++) {
         if (steps[j].lines.length > 0 && steps[j].startTime) {
@@ -147,8 +181,7 @@ export function parseLogsIntoSteps(rawLogs, buildStatus) {
         }
       }
     }
-    
-    // Calculate duration
+
     if (step.startTime && step.endTime) {
       const t1 = parseTimeToSeconds(step.startTime);
       const t2 = parseTimeToSeconds(step.endTime);
@@ -157,35 +190,27 @@ export function parseLogsIntoSteps(rawLogs, buildStatus) {
         if (diff < 0) diff += 24 * 3600;
         step.duration = `${diff.toFixed(1)}s`;
       } else {
-        step.duration = '0s';
+        step.duration = '0.1s';
       }
     } else if (step.startTime && buildStatus === 'RUNNING') {
       step.duration = 'running...';
     } else {
-      step.duration = '0.1s';
+      step.duration = '0.0s';
     }
   }
 
-  let hasFailedStep = false;
-  
   for (let i = 0; i < steps.length; i++) {
     const step = steps[i];
-    
-    // Check if the step lines contain any error keywords
-    const hasErrorKeyword = step.lines.some(l => 
+
+    const hasError = step.lines.some(l => 
       l.includes('❌') || 
-      l.toLowerCase().includes('operational breakdown') || 
-      l.toLowerCase().includes('pipeline broken down') ||
-      (step.id !== 'run_tests' && l.toLowerCase().includes('failed'))
+      l.toLowerCase().includes('failed') || 
+      l.toLowerCase().includes('error') || 
+      l.toLowerCase().includes('breakdown')
     );
 
-    const hasTestFail = step.id === 'run_tests' && step.lines.some(l => 
-      l.includes('Container execution exited with code') && !l.includes('code: 0') && !l.includes('code: \x1b[32m0')
-    );
-
-    if (hasErrorKeyword || hasTestFail) {
+    if (hasError) {
       step.status = 'failed';
-      hasFailedStep = true;
     } else if (step.lines.length > 0) {
       const isLastActiveStep = i === steps.findLastIndex(s => s.lines.length > 0);
       if (isLastActiveStep && buildStatus === 'RUNNING') {
@@ -194,12 +219,9 @@ export function parseLogsIntoSteps(rawLogs, buildStatus) {
         step.status = 'success';
       }
     } else {
-      // Step has 0 lines
       if (buildStatus === 'SUCCESS') {
-        // If the build succeeded, all non-failed steps are marked success
         step.status = 'success';
       } else if (step.id === 'cleanup' && buildStatus === 'FAILED') {
-        // Cleanup always runs in finally block even on failures
         step.status = 'success';
       } else {
         step.status = 'pending';
@@ -207,6 +229,5 @@ export function parseLogsIntoSteps(rawLogs, buildStatus) {
     }
   }
 
-  // Filter out steps with 0 lines that aren't critical
-  return steps.filter(s => s.lines.length > 0 || ['setup_workspace', 'env_setup', 'pull_image', 'run_tests', 'harvest_artifacts', 'cleanup'].includes(s.id));
+  return steps.filter(s => s.lines.length > 0 || ['setup_workspace', 'env_detect', 'cleanup'].includes(s.id));
 }

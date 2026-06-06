@@ -277,7 +277,7 @@ function App() {
       if (token) {
         fetchBuilds();
       }
-    }, 10000);
+    }, 3000);
 
     return () => clearInterval(interval);
   }, [token, checkHealth, fetchBuilds]);

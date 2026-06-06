@@ -8,6 +8,8 @@ const pool = require('./db');
 const { createWorkspace, cleanWorkspace } = require('./workspace');
 const { updateGitHubStatus } = require('./utils/githubStatus');
 const { restoreCache, saveCache } = require('./utils/cache');
+const { loadPipelineStages, hasCycle, executeDAG } = require('./utils/dag');
+
 
 
 // --- Terminal Styling Helpers (ANSI Colors) ---
@@ -66,31 +68,68 @@ const saveLogs = async (buildId, logs) => {
 
 // --- Language Detection & Workflow Configuration ---
 const detectProjectContext = async (workspacePath) => {
-  // 1. Check for magnus-ci.json
-  const configPath = path.join(workspacePath, 'magnus-ci.json');
-  try {
-    const data = await fs.readFile(configPath, 'utf8');
-    const config = JSON.parse(data);
-    if (!config.image || !config.run) {
-      throw new Error("Invalid configuration: 'image' and 'run' fields are required in magnus-ci.json.");
-    }
-    return {
-      language: config.language || 'custom',
-      imageName: config.image,
-      runCommand: config.run
-    };
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      throw err;
-    }
-  }
-
   // Helper check for file existence
   const fileExists = async (filename) => {
     return fs.access(path.join(workspacePath, filename))
       .then(() => true)
       .catch(() => false);
   };
+
+  // 1. Check for magnus-ci.json
+  const configPath = path.join(workspacePath, 'magnus-ci.json');
+  let config = null;
+  try {
+    const data = await fs.readFile(configPath, 'utf8');
+    config = JSON.parse(data);
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+
+  if (config) {
+    // Check if new DAG format
+    if (config.stages && typeof config.stages === 'object') {
+      let detectedLanguage = config.language;
+      let detectedImage = config.image;
+
+      if (!detectedLanguage) {
+        if (await fileExists('package.json')) detectedLanguage = 'Node.js';
+        else if (await fileExists('go.mod')) detectedLanguage = 'Go';
+        else if (await fileExists('requirements.txt')) detectedLanguage = 'Python';
+        else if (await fileExists('pom.xml')) detectedLanguage = 'Java (Maven)';
+        else if (await fileExists('build.gradle')) detectedLanguage = 'Java (Gradle)';
+        else detectedLanguage = 'custom';
+      }
+
+      if (!detectedImage) {
+        if (detectedLanguage === 'Node.js') detectedImage = 'node:20-alpine';
+        else if (detectedLanguage === 'Go') detectedImage = 'golang:1.21-alpine';
+        else if (detectedLanguage === 'Python') detectedImage = 'python:3.10-alpine';
+        else if (detectedLanguage.includes('Maven')) detectedImage = 'maven:3.9-eclipse-temurin-17-alpine';
+        else if (detectedLanguage.includes('Gradle')) detectedImage = 'gradle:8-jdk17-alpine';
+        else detectedImage = 'alpine:latest';
+      }
+
+      return {
+        language: detectedLanguage,
+        imageName: detectedImage,
+        runCommand: ''
+      };
+    }
+
+    // Legacy format check
+    if (config.image && config.run) {
+      return {
+        language: config.language || 'custom',
+        imageName: config.image,
+        runCommand: config.run
+      };
+    }
+
+    // Invalid format
+    throw new Error("Invalid configuration: 'stages' map or 'image' and 'run' fields are required in magnus-ci.json.");
+  }
 
   // 2. Automated Fallbacks
   // Node.js
@@ -414,8 +453,9 @@ const worker = new Worker('build-queue', async job => {
   console.log(`${styles.bright}${styles.blue}└────────────────────────────────────────────────────────┘${styles.reset}`);
 
   let workspacePath = '';
-  let container = null;
+  let activeContainers = {};
   let buildLogs = '';
+
   let statsInterval = null;
   let cacheHash = null;
 
@@ -456,27 +496,8 @@ const worker = new Worker('build-queue', async job => {
     
     const { language, imageName, runCommand } = await detectProjectContext(workspacePath);
     
-    buildLogs += logEngine(`Detected context: ${styles.green}${language}${styles.reset} environment. Selected container: ${styles.yellow}${imageName}${styles.reset}\n`);
-    buildLogs += logEngine(`Configured test command: ${styles.dim}${runCommand}${styles.reset}\n`);
+    buildLogs += logEngine(`Detected context: ${styles.green}${language}${styles.reset} environment. Selected base container: ${styles.yellow}${imageName}${styles.reset}\n`);
     await saveLogs(buildId, buildLogs);
-
-    // 5. Pull Docker image if not exists
-    let imageExists = false;
-    try {
-      await docker.getImage(imageName).inspect();
-      imageExists = true;
-    } catch (inspectErr) {
-      // Not found locally
-    }
-
-    if (!imageExists) {
-      logWorker(`Docker image ${imageName} missing locally. Pulling from hub...`);
-      buildLogs += logEngine(`Pulling base layer image: ${styles.magenta}${imageName}${styles.reset}...\n`);
-      await saveLogs(buildId, buildLogs);
-      await pullImage(imageName);
-      buildLogs += logEngine(`${styles.green}✔ Base layer cached successfully.${styles.reset}\n`);
-      await saveLogs(buildId, buildLogs);
-    }
 
     // Fetch repository_id to organize host cache directories
     const repoRes = await pool.query("SELECT repository_id FROM builds WHERE id = $1", [buildId]);
@@ -511,97 +532,192 @@ const worker = new Worker('build-queue', async job => {
       binds.push(`${localGoCache}:/go/pkg/mod`);
     }
 
+    // 5. Load pipeline DAG stages
+    buildLogs += logEngine(`Loading pipeline stages...\n`);
+    await saveLogs(buildId, buildLogs);
+    const stages = await loadPipelineStages(workspacePath, language, imageName);
 
-    // 6. Create isolated Docker Container
-    logWorker(`Spawning sandbox container for pipeline execution...`);
-    buildLogs += logEngine(`Configuring runtime container context...\n`);
+    if (hasCycle(stages)) {
+      throw new Error("Circular dependency detected in stages execution tree.");
+    }
+
+    buildLogs += logEngine(`Orchestrating pipeline workflow DAG:\n`);
+    for (const [name, stage] of Object.entries(stages)) {
+      const needsStr = stage.needs && stage.needs.length > 0 ? ` [needs: ${Array.isArray(stage.needs) ? stage.needs.join(', ') : stage.needs}]` : '';
+      buildLogs += `   - Stage: ${styles.bright}${name.toUpperCase()}${styles.reset} -> run: \`${stage.run}\`${needsStr}\n`;
+    }
     await saveLogs(buildId, buildLogs);
 
-    container = await docker.createContainer({
-      Image: imageName,
-      Cmd: ['/bin/sh', '-c', runCommand],
-      WorkingDir: '/app',
-      Env: ['CI=true'],
-      HostConfig: {
-        Binds: binds,
-        AutoRemove: true
-      },
-      Tty: true
-    });
+    // Stage execution runner
+    const runStageFn = async (stageName, stageConfig) => {
+      const stageImageName = stageConfig.image || imageName;
+      const stageRunCommand = stageConfig.run;
 
-    // Attach stream to capture stdout/stderr logs
-    const logStream = await container.attach({
-      stream: true,
-      stdout: true,
-      stderr: true
-    });
+      buildLogs += logEngine(`Preparing stage ${styles.bright}${stageName.toUpperCase()}${styles.reset} using image ${styles.yellow}${stageImageName}${styles.reset}...\n`);
+      await saveLogs(buildId, buildLogs);
 
-    let lastLogSave = Date.now();
-    logStream.on('data', (chunk) => {
-      const output = chunk.toString();
-      buildLogs += output;
-      process.stdout.write(output);
-      if (Date.now() - lastLogSave > 1000) {
-        saveLogs(buildId, buildLogs).catch(() => {});
-        lastLogSave = Date.now();
-      }
-    });
-
-    // Start container
-    await container.start();
-    logWorker(`Sandbox runtime container online.`);
-
-    const metrics = [];
-    statsInterval = setInterval(async () => {
-      if (!container) return;
+      // Make sure image is pulled
+      let stageImageExists = false;
       try {
-        const stats = await container.stats({ stream: false });
-        if (!stats || !stats.cpu_stats || !stats.memory_stats) return;
+        await docker.getImage(stageImageName).inspect();
+        stageImageExists = true;
+      } catch (inspectErr) {}
 
-        // Parse CPU percentage
-        let cpuPercent = 0;
-        const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - (stats.precpu_stats?.cpu_usage?.total_usage || 0);
-        const systemDelta = stats.cpu_stats.system_cpu_usage - (stats.precpu_stats?.system_cpu_usage || 0);
-        const onlineCpus = stats.cpu_stats.online_cpus || 1;
-        if (systemDelta > 0 && cpuDelta > 0) {
-          cpuPercent = parseFloat(((cpuDelta / systemDelta) * onlineCpus * 100.0).toFixed(2));
+      if (!stageImageExists) {
+        logWorker(`Docker image ${stageImageName} missing locally for stage ${stageName}. Pulling...`);
+        buildLogs += logEngine(`Pulling layer image: ${styles.magenta}${stageImageName}${styles.reset}...\n`);
+        await saveLogs(buildId, buildLogs);
+        await pullImage(stageImageName);
+        buildLogs += logEngine(`${styles.green}✔ Layer cached successfully for ${stageName}.${styles.reset}\n`);
+        await saveLogs(buildId, buildLogs);
+      }
+
+      logWorker(`Spawning sandbox container for stage: ${stageName}`);
+      buildLogs += logEngine(`Launching stage ${styles.bright}${stageName.toUpperCase()}${styles.reset} container context...\n`);
+      await saveLogs(buildId, buildLogs);
+
+      // Create container
+      const stageContainer = await docker.createContainer({
+        Image: stageImageName,
+        Cmd: ['/bin/sh', '-c', stageRunCommand],
+        WorkingDir: '/app',
+        Env: ['CI=true'],
+        HostConfig: {
+          Binds: binds,
+          AutoRemove: true
+        },
+        Tty: true
+      });
+
+      activeContainers[stageName] = stageContainer;
+
+      const stageLogStream = await stageContainer.attach({
+        stream: true,
+        stdout: true,
+        stderr: true
+      });
+
+      let lastLogSave = Date.now();
+      const stagePrefix = `${styles.bright}${styles.dim}[${stageName.toUpperCase()}]${styles.reset} `;
+
+      stageLogStream.on('data', (chunk) => {
+        const output = chunk.toString();
+        const prefixed = output
+          .split('\n')
+          .map(line => line.trim() ? `${stagePrefix}${line}` : '')
+          .filter(Boolean)
+          .join('\n');
+        
+        if (prefixed) {
+          buildLogs += prefixed + '\n';
+          process.stdout.write(prefixed + '\n');
         }
 
-        // Parse Memory usage
-        const memUsageBytes = stats.memory_stats.usage || 0;
-        const memUsageMB = parseFloat((memUsageBytes / (1024 * 1024)).toFixed(2));
-        const memLimitBytes = stats.memory_stats.limit || 1;
-        const memPercent = parseFloat(((memUsageBytes / memLimitBytes) * 100.0).toFixed(2));
+        if (Date.now() - lastLogSave > 1000) {
+          saveLogs(buildId, buildLogs).catch(() => {});
+          lastLogSave = Date.now();
+        }
+      });
 
-        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        metrics.push({ time, cpu: cpuPercent, memory: memUsageMB, memoryPercent: memPercent });
+      await stageContainer.start();
+      logWorker(`Stage ${stageName} runtime session active.`);
 
-        // Save to DB
-        await pool.query(
-          "UPDATE builds SET metrics = $1 WHERE id = $2",
-          [JSON.stringify(metrics), buildId]
-        );
-      } catch (statsErr) {
-        clearInterval(statsInterval);
+      // Implement timeout of 2 minutes for this stage
+      let stageTimeoutId;
+      const stageTimeoutPromise = new Promise((_, reject) => {
+        stageTimeoutId = setTimeout(() => {
+          reject(new Error(`Stage ${stageName} timed out after 2 minutes.`));
+        }, 120000);
+      });
+
+      try {
+        const stageExitCode = await Promise.race([
+          stageContainer.wait().then(res => res.StatusCode),
+          stageTimeoutPromise
+        ]);
+        clearTimeout(stageTimeoutId);
+        
+        buildLogs += logEngine(`Stage ${styles.bright}${stageName.toUpperCase()}${styles.reset} execution exited with code: ${stageExitCode === 0 ? styles.green + '0' : styles.red + stageExitCode}${styles.reset}\n`);
+        await saveLogs(buildId, buildLogs);
+
+        delete activeContainers[stageName];
+        return stageExitCode === 0;
+      } catch (err) {
+        clearTimeout(stageTimeoutId);
+        buildLogs += logEngine(`${styles.red}❌ Stage ${stageName.toUpperCase()} error: ${err.message}${styles.reset}\n`);
+        await saveLogs(buildId, buildLogs);
+        
+        try {
+          await stageContainer.kill();
+        } catch (killErr) {}
+        
+        delete activeContainers[stageName];
+        return false;
       }
+    };
+
+    // Aggregate metrics monitoring for all running containers
+    const metrics = [];
+    statsInterval = setInterval(async () => {
+      const activeStageNames = Object.keys(activeContainers);
+      if (activeStageNames.length === 0) return;
+      try {
+        let totalCpu = 0;
+        let totalMemMB = 0;
+        let count = 0;
+
+        for (const name of activeStageNames) {
+          const stageContainer = activeContainers[name];
+          if (!stageContainer) continue;
+          try {
+            const stats = await stageContainer.stats({ stream: false });
+            if (!stats || !stats.cpu_stats || !stats.memory_stats) continue;
+
+            let cpuPercent = 0;
+            const cpuDelta = stats.cpu_stats.cpu_usage.total_usage - (stats.precpu_stats?.cpu_usage?.total_usage || 0);
+            const systemDelta = stats.cpu_stats.system_cpu_usage - (stats.precpu_stats?.system_cpu_usage || 0);
+            const onlineCpus = stats.cpu_stats.online_cpus || 1;
+            if (systemDelta > 0 && cpuDelta > 0) {
+              cpuPercent = (cpuDelta / systemDelta) * onlineCpus * 100.0;
+            }
+
+            const memUsageBytes = stats.memory_stats.usage || 0;
+            const memUsageMB = memUsageBytes / (1024 * 1024);
+
+            totalCpu += cpuPercent;
+            totalMemMB += memUsageMB;
+            count++;
+          } catch (statsErr) {
+            // Ignore stats errors for individual containers
+          }
+        }
+
+        if (count > 0) {
+          const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+          metrics.push({ 
+            time, 
+            cpu: parseFloat(totalCpu.toFixed(2)), 
+            memory: parseFloat(totalMemMB.toFixed(2)), 
+            memoryPercent: 0 
+          });
+
+          await pool.query(
+            "UPDATE builds SET metrics = $1 WHERE id = $2",
+            [JSON.stringify(metrics), buildId]
+          );
+        }
+      } catch (err) {}
     }, 2000);
+    // 6. Execute stages via dynamic promise coordinator
+    const states = await executeDAG(stages, runStageFn);
+    clearInterval(statsInterval);
 
-    // 7. Implement timeout race condition (max 2 minutes)
-    let timeoutId;
-    const timeoutPromise = new Promise((_, reject) => {
-      timeoutId = setTimeout(() => {
-        reject(new Error("Build timed out after 2 minutes."));
-      }, 120000);
-    });
+    // Final outcome checks
+    const allPassed = Object.values(states).every(state => state === 'SUCCESS');
+    const exitCode = allPassed ? 0 : 1;
 
-    const exitCode = await Promise.race([
-      container.wait().then(res => res.StatusCode),
-      timeoutPromise
-    ]);
-    clearTimeout(timeoutId);
-
-    buildLogs += `\n` + logEngine(`Container execution exited with code: ${exitCode === 0 ? styles.green : styles.red}${exitCode}${styles.reset}\n`);
-    logWorker(`Runtime session killed. Status Code: ${exitCode}`);
+    buildLogs += `\n` + logEngine(`DAG execution finished with code: ${exitCode === 0 ? styles.green + '0' : styles.red + '1'}${styles.reset}\n`);
+    logWorker(`DAG pipeline session finished. Exit Code: ${exitCode}`);
 
     // Harvest artifacts before workspace cleanup
     let artifacts = [];
@@ -649,11 +765,12 @@ const worker = new Worker('build-queue', async job => {
     logError(`Build pipeline broken down at ID: ${buildId}`, err.message);
     buildLogs += `\n` + logEngine(`${styles.red}❌ Operational breakdown: ${err.message}${styles.reset}\n`);
 
-    if (container) {
+    for (const [name, stageContainer] of Object.entries(activeContainers)) {
       try {
-        await container.stop();
+        logWorker(`Forcibly halting container session for stage ${name}...`);
+        await stageContainer.kill();
       } catch (stopErr) {
-        // Container might already be stopped/removed
+        // Ignore if already stopped/killed
       }
     }
 
