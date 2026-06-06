@@ -513,6 +513,7 @@ const worker = new Worker('build-queue', async job => {
       Image: imageName,
       Cmd: ['/bin/sh', '-c', runCommand],
       WorkingDir: '/app',
+      Env: ['CI=true'],
       HostConfig: {
         Binds: binds,
         AutoRemove: true

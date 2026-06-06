@@ -196,7 +196,16 @@ function App() {
         const data = await res.json();
         setLogs(data.logs);
         if (data.build) {
-          setSelectedBuild(prev => prev ? ({ ...prev, ...data.build }) : null);
+          setSelectedBuild(prev => {
+            if (prev && prev.id === data.build.id && prev.status === data.build.status) {
+              const isLive = ["running", "pending"].includes(prev.status?.toLowerCase());
+              if (!isLive) {
+                // Return same reference to avoid infinite re-render loop on finished builds
+                return prev;
+              }
+            }
+            return prev ? ({ ...prev, ...data.build }) : null;
+          });
         }
       }
     } catch (err) {
@@ -206,20 +215,23 @@ function App() {
     }
   }, [token, fetchWithAuth]);
 
+  const selectedBuildId = selectedBuild?.id;
+  const selectedBuildStatus = selectedBuild?.status;
+
   useEffect(() => {
-    if (!selectedBuild) {
+    if (!selectedBuildId) {
       setLogs("");
       return;
     }
-    fetchLogs(selectedBuild.id);
-    const isLive = ["running", "pending"].includes(selectedBuild.status?.toLowerCase());
+    fetchLogs(selectedBuildId);
+    const isLive = ["running", "pending"].includes(selectedBuildStatus?.toLowerCase());
     if (!isLive) return;
     const interval = setInterval(() => {
       fetchBuilds();
-      fetchLogs(selectedBuild.id, true);
+      fetchLogs(selectedBuildId, true);
     }, 2000);
     return () => clearInterval(interval);
-  }, [selectedBuild, fetchLogs, fetchBuilds]);
+  }, [selectedBuildId, selectedBuildStatus, fetchLogs, fetchBuilds]);
 
   useEffect(() => {
     if (selectedBuild) {

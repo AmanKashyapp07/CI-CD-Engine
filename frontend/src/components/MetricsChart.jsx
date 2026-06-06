@@ -42,6 +42,8 @@ export default function MetricsChart({ rawMetrics, status }) {
   const currentMem = memVals[memVals.length - 1];
   const peakCpu = Math.max(...cpuVals);
   const peakMem = Math.max(...memVals);
+  const avgCpu = cpuVals.length > 0 ? (cpuVals.reduce((a, b) => a + b, 0) / cpuVals.length) : 0;
+  const avgMem = memVals.length > 0 ? (memVals.reduce((a, b) => a + b, 0) / memVals.length) : 0;
 
   // SVG Dimensions
   const width = 300;
@@ -90,8 +92,12 @@ export default function MetricsChart({ rawMetrics, status }) {
         <div className="bg-white/[0.01] border border-white/[0.04] rounded-xl p-3 flex flex-col gap-2 relative overflow-hidden group hover:border-white/[0.08] transition-all">
           <div className="flex justify-between items-baseline z-10">
             <div>
-              <div className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">CPU Utilization</div>
-              <div className="text-lg font-bold text-cyan-400 mt-0.5">{currentCpu.toFixed(1)}%</div>
+              <div className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">
+                {isRunning ? "CPU Utilization" : "Average CPU"}
+              </div>
+              <div className="text-lg font-bold text-cyan-400 mt-0.5">
+                {isRunning ? `${currentCpu.toFixed(1)}%` : `${avgCpu.toFixed(1)}%`}
+              </div>
             </div>
             <div className="text-right">
               <div className="text-[10px] uppercase font-bold text-zinc-600 tracking-wider">Peak CPU</div>
@@ -109,7 +115,7 @@ export default function MetricsChart({ rawMetrics, status }) {
               {/* Grid Lines */}
               <line x1="10" y1={height - 10} x2={width - 10} y2={height - 10} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
               <line x1="10" y1={height / 2} x2={width - 10} y2={height / 2} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
-              <line x1="10" y1="10" x2={width - 10} y2="10" stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
+              <line x1="10" y1="10" x2={width - 10} y2={10} stroke="rgba(255,255,255,0.03)" strokeWidth="1" />
               {/* Area Fill */}
               {cpuFillPath && <path d={cpuFillPath} fill="url(#cpuGrad)" />}
               {/* Stroke Line */}
@@ -132,8 +138,12 @@ export default function MetricsChart({ rawMetrics, status }) {
         <div className="bg-white/[0.01] border border-white/[0.04] rounded-xl p-3 flex flex-col gap-2 relative overflow-hidden group hover:border-white/[0.08] transition-all">
           <div className="flex justify-between items-baseline z-10">
             <div>
-              <div className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Memory Allocation</div>
-              <div className="text-lg font-bold text-indigo-400 mt-0.5">{currentMem.toFixed(1)} MB</div>
+              <div className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">
+                {isRunning ? "Memory Allocation" : "Average Memory"}
+              </div>
+              <div className="text-lg font-bold text-indigo-400 mt-0.5">
+                {isRunning ? `${currentMem.toFixed(1)} MB` : `${avgMem.toFixed(1)} MB`}
+              </div>
             </div>
             <div className="text-right">
               <div className="text-[10px] uppercase font-bold text-zinc-600 tracking-wider">Peak Memory</div>

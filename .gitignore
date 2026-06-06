@@ -10,3 +10,4 @@ backend/temp_builds/
 temp_builds/
 backend/caches/
 caches/
+backend/public/artifacts/
