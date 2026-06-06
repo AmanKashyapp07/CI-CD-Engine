@@ -6,7 +6,7 @@ const webhookUrl = "http://localhost:5001/api/webhooks/github";
 const secret = process.env.GITHUB_WEBHOOK_SECRET || ""; // Optional secret matching .env
 
 const payload = {
-  after: "1c96d9164e4eabb3ac0af39f3791c862900e9c6a", // Mock commit hash
+  after: "45c5d05ea7295bb7f9cb7139cf2a9cf9f848d531", // Mock commit hash
   repository: {
     name: "mock-repo",
     clone_url: "/Users/amankashyap/Documents/ci-cd-engine/backend/mock-repo",
