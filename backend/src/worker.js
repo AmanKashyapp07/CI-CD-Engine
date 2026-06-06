@@ -61,6 +61,102 @@ const saveLogs = async (buildId, logs) => {
   }
 };
 
+// --- Language Detection & Workflow Configuration ---
+const detectProjectContext = async (workspacePath) => {
+  // 1. Check for magnus-ci.json
+  const configPath = path.join(workspacePath, 'magnus-ci.json');
+  try {
+    const data = await fs.readFile(configPath, 'utf8');
+    const config = JSON.parse(data);
+    if (!config.image || !config.run) {
+      throw new Error("Invalid configuration: 'image' and 'run' fields are required in magnus-ci.json.");
+    }
+    return {
+      language: 'custom',
+      imageName: config.image,
+      runCommand: config.run
+    };
+  } catch (err) {
+    if (err.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+
+  // Helper check for file existence
+  const fileExists = async (filename) => {
+    return fs.access(path.join(workspacePath, filename))
+      .then(() => true)
+      .catch(() => false);
+  };
+
+  // 2. Automated Fallbacks
+  // Node.js
+  if (await fileExists('package.json')) {
+    return {
+      language: 'Node.js',
+      imageName: 'node:20-alpine',
+      runCommand: 'npm install && npm test'
+    };
+  }
+
+  // Go
+  if (await fileExists('go.mod')) {
+    return {
+      language: 'Go',
+      imageName: 'golang:1.21-alpine',
+      runCommand: 'go test -v ./...'
+    };
+  }
+
+  // Python
+  if (await fileExists('requirements.txt') || await fileExists('pyproject.toml') || await fileExists('setup.py')) {
+    const installCmd = await fileExists('requirements.txt') ? 'pip install -r requirements.txt && ' : '';
+    return {
+      language: 'Python',
+      imageName: 'python:3.10-alpine',
+      runCommand: `${installCmd}python -m unittest discover`
+    };
+  }
+
+  // Java Maven
+  if (await fileExists('pom.xml')) {
+    return {
+      language: 'Java (Maven)',
+      imageName: 'maven:3.9-eclipse-temurin-17-alpine',
+      runCommand: 'mvn test'
+    };
+  }
+
+  // Java Gradle
+  if (await fileExists('build.gradle')) {
+    return {
+      language: 'Java (Gradle)',
+      imageName: 'gradle:8-jdk17-alpine',
+      runCommand: 'gradle test'
+    };
+  }
+
+  // C/C++ CMake
+  if (await fileExists('CMakeLists.txt')) {
+    return {
+      language: 'C/C++ (CMake)',
+      imageName: 'gcc:13',
+      runCommand: 'mkdir -p build && cd build && cmake .. && make && ctest'
+    };
+  }
+
+  // C/C++ Makefile
+  if (await fileExists('Makefile')) {
+    return {
+      language: 'C/C++ (Make)',
+      imageName: 'gcc:13',
+      runCommand: 'make test'
+    };
+  }
+
+  throw new Error("Could not auto-detect project language type. Please add a 'magnus-ci.json' file to configure your build environment.");
+};
+
 // --- Worker Loop ---
 const worker = new Worker('build-queue', async job => {
   const { buildId, repoUrl, commitHash } = job.data;
@@ -102,17 +198,17 @@ const worker = new Worker('build-queue', async job => {
     buildLogs += logEngine(`${styles.green}✔ Target commit successfully isolated.${styles.reset}\n`);
     await saveLogs(buildId, buildLogs);
 
-    // 4. Validate package.json
-    const packageJsonExists = await fs.access(path.join(workspacePath, 'package.json'))
-      .then(() => true)
-      .catch(() => false);
+    // 4. Detect environment configuration
+    buildLogs += logEngine(`Detecting project language and build environment...\n`);
+    await saveLogs(buildId, buildLogs);
+    
+    const { language, imageName, runCommand } = await detectProjectContext(workspacePath);
+    
+    buildLogs += logEngine(`Detected context: ${styles.green}${language}${styles.reset} environment. Selected container: ${styles.yellow}${imageName}${styles.reset}\n`);
+    buildLogs += logEngine(`Configured test command: ${styles.dim}${runCommand}${styles.reset}\n`);
+    await saveLogs(buildId, buildLogs);
 
-    if (!packageJsonExists) {
-      throw new Error("package.json not found in repository root. A valid Node.js project is required.");
-    }
-
-    // 5. Pull Docker image node:20-alpine if not exists
-    const imageName = 'node:20-alpine';
+    // 5. Pull Docker image if not exists
     let imageExists = false;
     try {
       await docker.getImage(imageName).inspect();
@@ -124,17 +220,20 @@ const worker = new Worker('build-queue', async job => {
     if (!imageExists) {
       logWorker(`Docker image ${imageName} missing locally. Pulling from hub...`);
       buildLogs += logEngine(`Pulling base layer image: ${styles.magenta}${imageName}${styles.reset}...\n`);
+      await saveLogs(buildId, buildLogs);
       await pullImage(imageName);
       buildLogs += logEngine(`${styles.green}✔ Base layer cached successfully.${styles.reset}\n`);
+      await saveLogs(buildId, buildLogs);
     }
 
     // 6. Create isolated Docker Container
     logWorker(`Spawning sandbox container for pipeline execution...`);
     buildLogs += logEngine(`Configuring runtime container context...\n`);
+    await saveLogs(buildId, buildLogs);
 
     container = await docker.createContainer({
       Image: imageName,
-      Cmd: ['/bin/sh', '-c', 'npm install && npm test'],
+      Cmd: ['/bin/sh', '-c', runCommand],
       WorkingDir: '/app',
       HostConfig: {
         Binds: [`${workspacePath}:/app`],
