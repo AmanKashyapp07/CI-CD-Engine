@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs').promises;
 const pool = require('./db');
 const { createWorkspace, cleanWorkspace } = require('./workspace');
+const { updateGitHubStatus } = require('./utils/githubStatus');
 
 // --- Terminal Styling Helpers (ANSI Colors) ---
 const styles = {
@@ -157,10 +158,66 @@ const detectProjectContext = async (workspacePath) => {
   throw new Error("Could not auto-detect project language type. Please add a 'magnus-ci.json' file to configure your build environment.");
 };
 
+// --- Test Summary Parser Helper ---
+const extractTestSummary = (logs, defaultMsg) => {
+  if (!logs) return defaultMsg;
+  const cleanLogs = logs.replace(/[\u001b\u009b][[()#;?]*(?:[0-9]{1,4}(?:;[0-9]{0,4})*)?[0-9A-ORZcf-nqry=><]/g, '');
+
+  const jestRegex = /Tests:\s+(?:(\d+)\s+failed,\s+)?(?:(\d+)\s+passed,\s+)?(\d+)\s+total/;
+  const jestMatch = cleanLogs.match(jestRegex);
+  if (jestMatch) {
+    const failed = parseInt(jestMatch[1] || 0, 10);
+    const passed = parseInt(jestMatch[2] || 0, 10);
+    const total = parseInt(jestMatch[3] || 0, 10);
+    if (failed > 0) return `${passed}/${total} passed (${failed} failed)`;
+    return `${passed}/${total} passed`;
+  }
+
+  const pytestRegex = /==+\s+(?:(\d+)\s+failed,\s+)?(?:(\d+)\s+passed)?.*in\s+([\d.]+s)\s+==+/;
+  const pytestMatch = cleanLogs.match(pytestRegex);
+  if (pytestMatch) {
+    const failed = parseInt(pytestMatch[1] || 0, 10);
+    const passed = parseInt(pytestMatch[2] || 0, 10);
+    if (failed > 0) return `${passed} passed, ${failed} failed`;
+    return `${passed} passed`;
+  }
+
+  const junitRegex = /Tests run:\s*(\d+),\s*Failures:\s*(\d+),\s*Errors:\s*(\d+)/;
+  const junitMatch = cleanLogs.match(junitRegex);
+  if (junitMatch) {
+    const run = parseInt(junitMatch[1] || 0, 10);
+    const failures = parseInt(junitMatch[2] || 0, 10);
+    const errors = parseInt(junitMatch[3] || 0, 10);
+    const passed = run - failures - errors;
+    if (failures > 0 || errors > 0) return `${passed}/${run} passed (${failures + errors} failed)`;
+    return `${passed}/${run} passed`;
+  }
+
+  if (cleanLogs.includes('PASS') && cleanLogs.includes('ok')) {
+    return 'All tests passed';
+  }
+  if (cleanLogs.includes('FAIL') && cleanLogs.includes('--- FAIL:')) {
+    return 'Some tests failed';
+  }
+
+  return defaultMsg;
+};
+
 // --- Worker Loop ---
 const worker = new Worker('build-queue', async job => {
   const { buildId, repoUrl, commitHash } = job.data;
   
+  let owner = '';
+  let repoName = '';
+  try {
+    const parts = repoUrl.split('/');
+    repoName = parts.pop().replace('.git', '');
+    owner = parts.pop();
+  } catch (e) {}
+  
+  const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
+  const targetUrl = `${frontendUrl}/`;
+
   console.log(`\n${styles.bright}${styles.blue}┌────────────────────────────────────────────────────────┐${styles.reset}`);
   logWorker(`🚀 Job Picked Up | ${styles.bright}Build ID: ${buildId}${styles.reset}`);
   logWorker(`📂 Repo: ${styles.dim}${repoUrl}${styles.reset} @ [${styles.yellow}${commitHash.slice(0, 7)}${styles.reset}]`);
@@ -177,6 +234,8 @@ const worker = new Worker('build-queue', async job => {
       [buildId]
     );
     logWorker(`Build status forced to ${styles.yellow}RUNNING${styles.reset}.`);
+    
+    await updateGitHubStatus(owner, repoName, commitHash, 'pending', 'Build started', targetUrl);
 
     // 2. Create local workspace
     workspacePath = await createWorkspace(buildId);
@@ -288,6 +347,12 @@ const worker = new Worker('build-queue', async job => {
       [finalStatus, buildId]
     );
 
+    const githubState = exitCode === 0 ? 'success' : 'failure';
+    const defaultMsg = `Build ${finalStatus.toLowerCase()}`;
+    const testSummary = extractTestSummary(buildLogs, defaultMsg);
+    const description = testSummary !== defaultMsg ? `${language}: ${testSummary}` : defaultMsg;
+    await updateGitHubStatus(owner, repoName, commitHash, githubState, description, targetUrl);
+
     await saveLogs(buildId, buildLogs);
 
   } catch (err) {
@@ -306,6 +371,8 @@ const worker = new Worker('build-queue', async job => {
       "UPDATE builds SET status = 'FAILED', finished_at = NOW() WHERE id = $1",
       [buildId]
     );
+
+    await updateGitHubStatus(owner, repoName, commitHash, 'error', 'Build error', targetUrl);
 
     await saveLogs(buildId, buildLogs);
   } finally {
