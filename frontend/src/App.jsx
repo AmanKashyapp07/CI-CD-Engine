@@ -75,6 +75,19 @@ function App() {
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleDownloadLogs = () => {
+    const cleanLogs = stripAnsi(logs);
+    const blob = new Blob([cleanLogs], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `magnus-build-${selectedBuild?.commit_hash?.substring(0, 7) || "report"}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   // Check URL parameters for a new token redirect from GitHub callback
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -176,6 +189,9 @@ function App() {
       if (res.ok) {
         const data = await res.json();
         setLogs(data.logs);
+        if (data.build) {
+          setSelectedBuild(prev => prev ? ({ ...prev, ...data.build }) : null);
+        }
       }
     } catch (err) {
       console.error("Failed to fetch logs:", err);
@@ -644,7 +660,7 @@ function App() {
                                   <span className="text-[9px] font-bold text-cyan-400 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">Selected</span>
                                 )}
                               </span>
-                              <a href={repo.github_url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-zinc-500 hover:text-cyan-400 transition-colors mt-0.5 max-w-[200px] sm:max-w-xs truncate">
+                              <a href={repo.github_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()} className="text-[11px] text-zinc-500 hover:text-cyan-400 transition-colors mt-0.5 max-w-[200px] sm:max-w-xs truncate">
                                 {repo.github_url}
                               </a>
                             </div>
@@ -745,9 +761,17 @@ function App() {
                               <svg className="w-3.5 h-3.5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01" /></svg>
                               {build.repository_name}
                             </span>
-                            <span className={`text-[9px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-md ${getStatusBadgeClass(build.status)}`}>
-                              {build.status}
-                            </span>
+                            <div className="flex items-center gap-2">
+                              {build.artifacts && build.artifacts.length > 0 && (
+                                <span className="text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-md bg-indigo-500/10 text-indigo-400 border border-indigo-500/30 shadow-[0_0_10px_rgba(99,102,241,0.15)] flex items-center gap-1">
+                                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                                  {build.artifacts.length} Artifact{build.artifacts.length > 1 ? 's' : ''}
+                                </span>
+                              )}
+                              <span className={`text-[9px] font-bold uppercase tracking-widest px-2.5 py-1 rounded-md ${getStatusBadgeClass(build.status)}`}>
+                                {build.status}
+                              </span>
+                            </div>
                           </div>
                           
                           <div className="flex flex-col gap-2 text-[11px] font-mono">
@@ -773,16 +797,15 @@ function App() {
 
       {/* Logs Modal */}
       {selectedBuild && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-[#020202]/80 backdrop-blur-md">
-          <div className="w-full max-w-5xl h-[85vh] bg-[#050505] border border-white/[0.1] rounded-2xl shadow-2xl flex flex-col overflow-hidden relative">
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-[#020202]/80 backdrop-blur-md" onClick={() => setSelectedBuild(null)}>
+          <div className="w-full max-w-6xl h-[85vh] bg-[#050505] border border-white/[0.1] rounded-2xl shadow-2xl flex flex-col overflow-hidden relative" onClick={(e) => e.stopPropagation()}>
             
             {/* Modal Header */}
             <div className="h-14 bg-white/[0.03] border-b border-white/[0.08] flex items-center px-5 justify-between select-none">
               <div className="flex items-center gap-4">
+                {/* Decorative Window Controls */}
                 <div className="flex gap-2">
-                  <button onClick={() => setSelectedBuild(null)} className="w-3.5 h-3.5 rounded-full bg-rose-500/80 hover:bg-rose-400 shadow-[0_0_8px_rgba(244,63,94,0.5)] transition-colors flex items-center justify-center group">
-                     <svg className="w-2.5 h-2.5 text-black opacity-0 group-hover:opacity-100" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
-                  </button>
+                  <div className="w-3.5 h-3.5 rounded-full bg-rose-500/80 shadow-[0_0_8px_rgba(244,63,94,0.5)]"></div>
                   <div className="w-3.5 h-3.5 rounded-full bg-amber-500/80 shadow-[0_0_8px_rgba(245,158,11,0.5)]"></div>
                   <div className="w-3.5 h-3.5 rounded-full bg-emerald-500/80 shadow-[0_0_8px_rgba(16,185,129,0.5)]"></div>
                 </div>
@@ -800,17 +823,71 @@ function App() {
                 </div>
               </div>
 
-              <button
-                onClick={handleCopyLogs}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium text-zinc-300 transition-colors"
-              >
-                {copied ? (
-                  <><svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg> Copied</>
-                ) : (
-                  <><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg> Copy Logs</>
-                )}
-              </button>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={handleDownloadLogs}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 text-xs font-medium text-indigo-300 transition-colors"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                  Download Logs
+                </button>
+                
+                <button
+                  onClick={handleCopyLogs}
+                  className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-medium text-zinc-300 transition-colors"
+                >
+                  {copied ? (
+                    <><svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg> Copied</>
+                  ) : (
+                    <><svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg> Copy Logs</>
+                  )}
+                </button>
+
+                <div className="w-px h-5 bg-white/10 mx-1"></div>
+
+                <button
+                  onClick={() => setSelectedBuild(null)}
+                  className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-400 transition-colors flex items-center justify-center group"
+                  title="Close"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+              </div>
             </div>
+
+            {/* Artifacts Panel */}
+            {selectedBuild.artifacts && selectedBuild.artifacts.length > 0 && (
+              <div className="bg-white/[0.02] border-b border-white/[0.08] px-5 py-3 flex flex-wrap gap-3 items-center select-none">
+                <span className="text-zinc-400 font-bold text-xs uppercase tracking-wider flex items-center gap-1.5">
+                  <svg className="w-3.5 h-3.5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" /></svg>
+                  Build Artifacts:
+                </span>
+                {selectedBuild.artifacts.map((art, idx) => (
+                  art.type === 'file' ? (
+                    <a
+                      key={idx}
+                      href={`${API_BASE.replace('/api', '')}${art.path}`}
+                      download
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-indigo-500/10 hover:bg-indigo-500/25 border border-indigo-500/30 text-xs font-semibold text-indigo-300 hover:text-indigo-200 transition-all shadow-[0_0_12px_rgba(99,102,241,0.05)] hover:shadow-[0_0_12px_rgba(99,102,241,0.15)] active:scale-[0.97]"
+                    >
+                      <svg className="w-4 h-4 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                      ⬇ Download {art.name}
+                    </a>
+                  ) : (
+                    <a
+                      key={idx}
+                      href={`${API_BASE.replace('/api', '')}${art.path}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-cyan-500/10 hover:bg-cyan-500/25 border border-cyan-500/30 text-xs font-semibold text-cyan-300 hover:text-cyan-200 transition-all shadow-[0_0_12px_rgba(6,182,212,0.05)] hover:shadow-[0_0_12px_rgba(6,182,212,0.15)]"
+                    >
+                      <svg className="w-4 h-4 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                      {art.name}
+                    </a>
+                  )
+                ))}
+              </div>
+            )}
 
             {/* Modal Body (Terminal) */}
             <div className="flex-1 overflow-y-auto p-6 bg-[#020202] font-mono text-xs sm:text-sm text-zinc-300 custom-scrollbar">

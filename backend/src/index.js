@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const path = require("path");
 dotenv.config();
 
 const pool = require("./db");
@@ -15,6 +16,9 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 app.use(cors());
+
+// Expose public artifacts folder statically
+app.use('/artifacts', express.static(path.join(__dirname, '../public/artifacts')));
 
 // Configure JSON parser to extract rawBody for signature verification
 app.use(

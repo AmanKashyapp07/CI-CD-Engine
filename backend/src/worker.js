@@ -73,7 +73,7 @@ const detectProjectContext = async (workspacePath) => {
       throw new Error("Invalid configuration: 'image' and 'run' fields are required in magnus-ci.json.");
     }
     return {
-      language: 'custom',
+      language: config.language || 'custom',
       imageName: config.image,
       runCommand: config.run
     };
@@ -294,6 +294,84 @@ ${testDetails}`;
   return logOutput;
 };
 
+// --- Artifact Harvesting Helper ---
+async function harvestArtifacts(workspacePath, buildId) {
+  const artifacts = [];
+  const publicArtifactsDir = path.join(__dirname, '../public/artifacts', String(buildId));
+  await fs.mkdir(publicArtifactsDir, { recursive: true });
+
+  const fileExists = async (p) => {
+    try {
+      await fs.access(p);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  // 1. Jest Coverage
+  const jestCoveragePath = path.join(workspacePath, 'coverage/lcov-report');
+  if (await fileExists(jestCoveragePath)) {
+    const dest = path.join(publicArtifactsDir, 'coverage');
+    await fs.mkdir(dest, { recursive: true });
+    await fs.cp(jestCoveragePath, dest, { recursive: true });
+    artifacts.push({
+      name: "Jest Test Coverage Report",
+      path: `/artifacts/${buildId}/coverage/index.html`,
+      type: "html"
+    });
+  }
+
+  // 2. Python Coverage
+  const pyCoveragePath = path.join(workspacePath, 'htmlcov');
+  if (await fileExists(pyCoveragePath)) {
+    const dest = path.join(publicArtifactsDir, 'htmlcov');
+    await fs.mkdir(dest, { recursive: true });
+    await fs.cp(pyCoveragePath, dest, { recursive: true });
+    artifacts.push({
+      name: "Python Test Coverage Report",
+      path: `/artifacts/${buildId}/htmlcov/index.html`,
+      type: "html"
+    });
+  }
+
+  // 3. Search for compiled binaries (.jar, .war, .zip, etc.)
+  const scanDirs = [
+    path.join(workspacePath, 'target'),
+    path.join(workspacePath, 'build/libs'),
+    workspacePath
+  ];
+
+  for (const dir of scanDirs) {
+    if (await fileExists(dir)) {
+      try {
+        const files = await fs.readdir(dir, { withFileTypes: true });
+        for (const file of files) {
+          if (file.isFile()) {
+            const ext = path.extname(file.name).toLowerCase();
+            if (['.jar', '.war', '.zip', '.tar.gz', '.exe', '.msi'].includes(ext)) {
+              const srcFile = path.join(dir, file.name);
+              const destFileDir = path.join(publicArtifactsDir, 'bin');
+              await fs.mkdir(destFileDir, { recursive: true });
+              const destFile = path.join(destFileDir, file.name);
+              await fs.copyFile(srcFile, destFile);
+              artifacts.push({
+                name: `Built Binary (${file.name})`,
+                path: `/artifacts/${buildId}/bin/${file.name}`,
+                type: "file"
+              });
+            }
+          }
+        }
+      } catch (err) {
+        // Log reading error and skip
+      }
+    }
+  }
+
+  return artifacts;
+}
+
 // --- Worker Loop ---
 const worker = new Worker('build-queue', async job => {
   const { buildId, repoUrl, commitHash, branchName = 'main' } = job.data;
@@ -461,11 +539,25 @@ const worker = new Worker('build-queue', async job => {
     buildLogs += `\n` + logEngine(`Container execution exited with code: ${exitCode === 0 ? styles.green : styles.red}${exitCode}${styles.reset}\n`);
     logWorker(`Runtime session killed. Status Code: ${exitCode}`);
 
+    // Harvest artifacts before workspace cleanup
+    let artifacts = [];
+    if (workspacePath) {
+      try {
+        artifacts = await harvestArtifacts(workspacePath, buildId);
+        if (artifacts.length > 0) {
+          logWorker(`[ARTIFACTS] Harvested ${artifacts.length} artifacts.`);
+          buildLogs += `\n` + logEngine(`${styles.green}✔ Captured ${artifacts.length} build artifact(s).${styles.reset}\n`);
+        }
+      } catch (artErr) {
+        logError(`[ARTIFACTS] Failed to harvest artifacts for build ID ${buildId}:`, artErr.message);
+      }
+    }
+
     // Update status to SUCCESS or FAILED based on exit code
     const finalStatus = exitCode === 0 ? 'SUCCESS' : 'FAILED';
     await pool.query(
-      "UPDATE builds SET status = $1, finished_at = NOW() WHERE id = $2",
-      [finalStatus, buildId]
+      "UPDATE builds SET status = $1, finished_at = NOW(), artifacts = $2 WHERE id = $3",
+      [finalStatus, JSON.stringify(artifacts), buildId]
     );
 
     const githubState = exitCode === 0 ? 'success' : 'failure';
@@ -493,9 +585,18 @@ const worker = new Worker('build-queue', async job => {
       }
     }
 
+    let artifacts = [];
+    if (workspacePath) {
+      try {
+        artifacts = await harvestArtifacts(workspacePath, buildId);
+      } catch (artErr) {
+        logError(`[ARTIFACTS] Failed to harvest artifacts in catch block:`, artErr.message);
+      }
+    }
+
     await pool.query(
-      "UPDATE builds SET status = 'FAILED', finished_at = NOW() WHERE id = $1",
-      [buildId]
+      "UPDATE builds SET status = 'FAILED', finished_at = NOW(), artifacts = $1 WHERE id = $2",
+      [JSON.stringify(artifacts), buildId]
     );
 
     await updateGitHubStatus(owner, repoName, commitHash, 'error', 'Build error', targetUrl);
