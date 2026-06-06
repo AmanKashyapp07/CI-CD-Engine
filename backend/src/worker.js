@@ -349,8 +349,27 @@ async function harvestArtifacts(workspacePath, buildId) {
         for (const file of files) {
           if (file.isFile()) {
             const ext = path.extname(file.name).toLowerCase();
-            if (['.jar', '.war', '.zip', '.tar.gz', '.exe', '.msi'].includes(ext)) {
-              const srcFile = path.join(dir, file.name);
+            const srcFile = path.join(dir, file.name);
+
+            // Determine if the file is executable on Unix/Linux systems
+            let isExecutable = false;
+            try {
+              const stats = await fs.stat(srcFile);
+              isExecutable = !!(stats.mode & 0o111);
+            } catch (statErr) {
+              // Ignore stat error
+            }
+
+            // Exclude hidden files or source code/config files from being classified as binaries
+            const isSourceOrConfig = ['.cpp', '.c', '.h', '.hpp', '.o', '.js', '.json', '.md', '.txt', '.yml', '.yaml', '.sh'].includes(ext);
+
+            const isAllowedArtifact = 
+              ['.jar', '.war', '.zip', '.exe', '.msi', '.out', '.bin'].includes(ext) ||
+              file.name.endsWith('.tar.gz') ||
+              file.name.endsWith('.tgz') ||
+              (ext === '' && isExecutable && !file.name.startsWith('.') && !isSourceOrConfig);
+
+            if (isAllowedArtifact) {
               const destFileDir = path.join(publicArtifactsDir, 'bin');
               await fs.mkdir(destFileDir, { recursive: true });
               const destFile = path.join(destFileDir, file.name);
