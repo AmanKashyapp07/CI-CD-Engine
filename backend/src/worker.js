@@ -331,6 +331,36 @@ const worker = new Worker('build-queue', async job => {
       await saveLogs(buildId, buildLogs);
     }
 
+    // Fetch repository_id to organize host cache directories
+    const repoRes = await pool.query("SELECT repository_id FROM builds WHERE id = $1", [buildId]);
+    const repositoryId = repoRes.rows[0]?.repository_id || 1;
+
+    // Determine cache bind mounts dynamically
+    const binds = [`${workspacePath}:/app`];
+    const cachesBaseDir = path.join(__dirname, '../caches', String(repositoryId));
+
+    if (language === 'Node.js') {
+      const nodeModulesCache = path.join(cachesBaseDir, 'node_modules');
+      await fs.mkdir(nodeModulesCache, { recursive: true });
+      binds.push(`${nodeModulesCache}:/app/node_modules`);
+    } else if (language === 'Python') {
+      const pipCache = path.join(cachesBaseDir, 'pip_cache');
+      await fs.mkdir(pipCache, { recursive: true });
+      binds.push(`${pipCache}:/root/.cache/pip`);
+    } else if (language.includes('Maven')) {
+      const mavenCache = path.join(cachesBaseDir, 'maven_m2');
+      await fs.mkdir(mavenCache, { recursive: true });
+      binds.push(`${mavenCache}:/root/.m2`);
+    } else if (language.includes('Gradle')) {
+      const gradleCache = path.join(cachesBaseDir, 'gradle');
+      await fs.mkdir(gradleCache, { recursive: true });
+      binds.push(`${gradleCache}:/root/.gradle`);
+    } else if (language === 'Go') {
+      const goCache = path.join(cachesBaseDir, 'go_mod');
+      await fs.mkdir(goCache, { recursive: true });
+      binds.push(`${goCache}:/go/pkg/mod`);
+    }
+
     // 6. Create isolated Docker Container
     logWorker(`Spawning sandbox container for pipeline execution...`);
     buildLogs += logEngine(`Configuring runtime container context...\n`);
@@ -341,7 +371,7 @@ const worker = new Worker('build-queue', async job => {
       Cmd: ['/bin/sh', '-c', runCommand],
       WorkingDir: '/app',
       HostConfig: {
-        Binds: [`${workspacePath}:/app`],
+        Binds: binds,
         AutoRemove: true
       },
       Tty: true
