@@ -512,7 +512,7 @@ const worker = new Worker('build-queue', async job => {
       await cleanWorkspace(buildId);
     }
   }
-}, { connection });
+}, { connection, concurrency: 4 });
 
 // --- Global Worker Events ---
 worker.on('completed', job => {
