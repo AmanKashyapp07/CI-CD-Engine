@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 
 export default function BuildHistory({
   filteredBuilds,
@@ -7,6 +7,17 @@ export default function BuildHistory({
   setSelectedBuild,
   getStatusBadgeClass
 }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 5;
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [selectedRepo?.id, filteredBuilds.length]);
+
+  const totalPages = Math.ceil(filteredBuilds.length / pageSize);
+  const activePage = Math.min(currentPage, Math.max(totalPages, 1));
+  const paginatedBuilds = filteredBuilds.slice((activePage - 1) * pageSize, activePage * pageSize);
+
   return (
     <div className="bg-[#050505] border border-white/[0.08] rounded-3xl overflow-hidden shadow-2xl flex flex-col h-full relative">
       {/* Fake Terminal Header */}
@@ -62,7 +73,7 @@ export default function BuildHistory({
           </div>
         ) : (
           <div className="flex flex-col gap-5">
-            {filteredBuilds.map((build) => (
+            {paginatedBuilds.map((build) => (
               <div key={build.id} className="relative pl-6 before:content-[''] before:absolute before:left-[11px] before:top-[30px] before:bottom-[-20px] before:w-px before:bg-white/[0.1] last:before:hidden">
                 {/* Timeline Dot */}
                 <div className="absolute left-0 top-1.5 w-6 h-6 rounded-full bg-[#050505] border border-white/10 flex items-center justify-center z-10">
@@ -98,11 +109,11 @@ export default function BuildHistory({
                   
                   <div className="flex flex-col gap-2 text-[11px] font-mono">
                     <div className="flex justify-between items-center bg-[#000000] px-3 py-2 rounded-lg border border-white/5">
-                      <span className="text-zinc-600">commit_sha</span> 
+                      <span className="text-zinc-650">commit_sha</span> 
                       <span className="text-cyan-400 font-semibold">{build.commit_hash?.substring(0, 7) || "null"}</span>
                     </div>
                     <div className="flex justify-between items-center px-1">
-                      <span className="text-zinc-600">timestamp</span> 
+                      <span className="text-zinc-650">timestamp</span> 
                       <span className="text-zinc-400">{new Date(build.created_at).toLocaleString([], { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
                     </div>
                   </div>
@@ -112,6 +123,42 @@ export default function BuildHistory({
           </div>
         )}
       </div>
+
+      {/* Terminal Footer with Pagination */}
+      {totalPages > 1 && (
+        <div className="h-12 bg-white/[0.01] border-t border-white/[0.08] flex items-center px-5 justify-between select-none text-xs text-zinc-500 font-mono">
+          <span>
+            PAGE: <strong className="text-zinc-300">{activePage}</strong> / <strong className="text-zinc-300">{totalPages}</strong>
+          </span>
+          <span className="hidden sm:inline text-[10px] text-zinc-650">
+            SHOWING {(activePage - 1) * pageSize + 1}-{Math.min(activePage * pageSize, filteredBuilds.length)} OF {filteredBuilds.length}
+          </span>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={activePage === 1}
+              className={`px-2.5 py-1.5 rounded-lg border text-[10px] uppercase font-bold tracking-wider transition-colors ${
+                activePage === 1
+                  ? 'border-white/5 text-zinc-700 cursor-not-allowed bg-transparent'
+                  : 'border-white/10 hover:border-cyan-500/30 hover:bg-cyan-500/5 text-cyan-400 hover:text-cyan-300'
+              }`}
+            >
+              PREV
+            </button>
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={activePage === totalPages}
+              className={`px-2.5 py-1.5 rounded-lg border text-[10px] uppercase font-bold tracking-wider transition-colors ${
+                activePage === totalPages
+                  ? 'border-white/5 text-zinc-700 cursor-not-allowed bg-transparent'
+                  : 'border-white/10 hover:border-cyan-500/30 hover:bg-cyan-500/5 text-cyan-400 hover:text-cyan-300'
+              }`}
+            >
+              NEXT
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -28,6 +28,18 @@ function App() {
   const [copied, setCopied] = useState(false);
   const logsEndRef = useRef(null);
 
+  const [toast, setToast] = useState(null);
+
+  const showToast = useCallback((msg, type = "success") => {
+    setToast({ message: msg, type });
+  }, []);
+
+  useEffect(() => {
+    if (!toast || toast.type === "confirm") return;
+    const timer = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
   // Helper for stripping ANSI and cleaning raw TTY output (spinners, carriage returns, Jest noise)
   const stripAnsi = (str) => {
     if (!str) return "";
@@ -270,10 +282,45 @@ function App() {
     return () => clearInterval(interval);
   }, [token, checkHealth, fetchBuilds]);
 
+  const handleDeleteRepo = (repo) => {
+    setToast({
+      message: `Are you sure you want to delete workspace "${repo.name}" and all of its execution history? This action cannot be undone.`,
+      type: "confirm",
+      repoId: repo.id
+    });
+  };
+
+  const executeDeleteRepo = async (repoId) => {
+    setToast(null);
+    try {
+      const res = await fetchWithAuth(`${API_BASE}/repositories/${repoId}`, {
+        method: "DELETE"
+      });
+      if (res.ok) {
+        showToast("Workspace and corresponding execution history deleted successfully.", "success");
+        setSelectedRepo(prev => prev && prev.id === repoId ? null : prev);
+        fetchRepos();
+        fetchBuilds();
+      } else {
+        let errorMsg = "Failed to delete workspace.";
+        try {
+          const data = await res.json();
+          errorMsg = data.error || errorMsg;
+        } catch (jsonErr) {
+          // non-JSON error response, use default message
+        }
+        showToast(errorMsg, "error");
+      }
+    } catch (err) {
+      showToast("Server connection failed.", "error");
+    }
+  };
+
   const handleRegisterRepo = async (e) => {
     e.preventDefault();
     if (!repoName || !repoUrl) {
       setError("Please fill out all fields.");
+      showToast("Please fill out all fields.", "error");
       return;
     }
 
@@ -293,14 +340,17 @@ function App() {
       const data = await res.json();
       if (res.ok) {
         setMessage("Repository registered successfully!");
+        showToast("Repository registered successfully!", "success");
         setRepoName("");
         setRepoUrl("");
         fetchRepos();
       } else {
         setError(data.error || "Failed to register repository.");
+        showToast(data.error || "Failed to register repository.", "error");
       }
     } catch (err) {
       setError("Server connection failed.");
+      showToast("Server connection failed.", "error");
     } finally {
       setIsLoading(false);
     }
@@ -516,6 +566,7 @@ function App() {
               repos={repos}
               selectedRepo={selectedRepo}
               setSelectedRepo={setSelectedRepo}
+              onDeleteRepo={handleDeleteRepo}
             />
           </section>
 
@@ -532,6 +583,146 @@ function App() {
         </div>
       </main>
 
+      {/* ─── Production Footer ─── */}
+      <footer className="relative z-10 border-t border-white/[0.05] bg-white/[0.01] mt-auto">
+        {/* Top gradient separator */}
+        <div className="h-px w-full bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent" />
+
+        <div className="max-w-7xl mx-auto px-6 py-8">
+          {/* Main footer grid */}
+          <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-8 mb-8">
+
+            {/* Brand column */}
+            <div className="lg:col-span-1 flex flex-col gap-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-cyan-500 to-emerald-500 flex items-center justify-center shadow-lg shadow-cyan-500/25">
+                  <svg className="w-4 h-4 text-zinc-950" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <span className="font-bold text-white tracking-tight">Magnus<span className="text-cyan-400">CI</span></span>
+              </div>
+              <p className="text-xs text-zinc-500 leading-relaxed max-w-[200px]">
+                Automated pipeline orchestration for modern engineering teams.
+              </p>
+              {/* System status pill */}
+              <div className="flex items-center gap-2 w-fit px-2.5 py-1.5 rounded-lg bg-white/[0.03] border border-white/[0.06]">
+                <span className="relative flex h-1.5 w-1.5">
+                  {dbStatus === "connected" && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />}
+                  <span className={`relative inline-flex rounded-full h-1.5 w-1.5 ${dbStatus === "connected" ? "bg-emerald-500" : "bg-rose-500"}`} />
+                </span>
+                <span className="text-[10px] font-mono text-zinc-500 uppercase tracking-widest">
+                  {dbStatus === "connected" ? "All systems operational" : "Degraded"}
+                </span>
+              </div>
+            </div>
+
+            {/* Live Stats column */}
+            <div className="flex flex-col gap-3">
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-1">Live Stats</h3>
+              <div className="flex flex-col gap-2">
+                {[
+                  { label: "Registered Workspaces", value: repos.length },
+                  { label: "Total Pipeline Runs", value: builds.length },
+                  { label: "Active Runners", value: builds.filter(b => b.status?.toLowerCase() === "running").length },
+                  {
+                    label: "Success Rate",
+                    value: (() => {
+                      const done = builds.filter(b => ["success","failed"].includes(b.status?.toLowerCase()));
+                      if (!done.length) return "—";
+                      return `${Math.round((done.filter(b => b.status?.toLowerCase() === "success").length / done.length) * 100)}%`;
+                    })()
+                  },
+                ].map(({ label, value }) => (
+                  <div key={label} className="flex justify-between items-center py-1 border-b border-white/[0.04] last:border-0">
+                    <span className="text-[11px] text-zinc-500 font-mono">{label}</span>
+                    <span className="text-[11px] font-bold text-zinc-300 font-mono tabular-nums">{value}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Stack column */}
+            <div className="flex flex-col gap-3">
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-1">Tech Stack</h3>
+              <div className="flex flex-wrap gap-1.5">
+                {[
+                  { label: "Node.js", color: "emerald" },
+                  { label: "PostgreSQL", color: "cyan" },
+                  { label: "BullMQ", color: "amber" },
+                  { label: "Docker", color: "sky" },
+                  { label: "React", color: "cyan" },
+                  { label: "GitHub OAuth", color: "violet" },
+                  { label: "Webhooks", color: "rose" },
+                ].map(({ label, color }) => (
+                  <span
+                    key={label}
+                    className={`text-[9px] font-bold uppercase tracking-widest px-2 py-1 rounded-md border
+                      ${color === "emerald" ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : ""}
+                      ${color === "cyan" ? "bg-cyan-500/10 text-cyan-400 border-cyan-500/20" : ""}
+                      ${color === "amber" ? "bg-amber-500/10 text-amber-400 border-amber-500/20" : ""}
+                      ${color === "sky" ? "bg-sky-500/10 text-sky-400 border-sky-500/20" : ""}
+                      ${color === "violet" ? "bg-violet-500/10 text-violet-400 border-violet-500/20" : ""}
+                      ${color === "rose" ? "bg-rose-500/10 text-rose-400 border-rose-500/20" : ""}
+                    `}
+                  >
+                    {label}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            {/* Pipeline health column */}
+            <div className="flex flex-col gap-3">
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-600 mb-1">Pipeline Health</h3>
+              <div className="flex flex-col gap-2.5">
+                {[
+                  { label: "Webhook Listener", ok: dbStatus === "connected" },
+                  { label: "Database Connection", ok: dbStatus === "connected" },
+                  { label: "Build Queue", ok: true },
+                  { label: "Container Runtime", ok: true },
+                ].map(({ label, ok }) => (
+                  <div key={label} className="flex items-center gap-2">
+                    <div className={`w-1.5 h-1.5 rounded-full shrink-0 ${ok ? "bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]" : "bg-rose-500 shadow-[0_0_6px_rgba(239,68,68,0.6)]"}`} />
+                    <span className="text-[11px] font-mono text-zinc-500">{label}</span>
+                    <span className={`ml-auto text-[9px] font-bold uppercase tracking-wider ${ok ? "text-emerald-500" : "text-rose-400"}`}>
+                      {ok ? "UP" : "DOWN"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+          </div>
+
+          {/* Bottom bar */}
+          <div className="pt-6 border-t border-white/[0.04] flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-4">
+              <span className="text-[10px] font-mono text-zinc-600">
+                © {new Date().getFullYear()} MagnusCI &nbsp;·&nbsp; v2.0.0
+              </span>
+              <span className="hidden sm:inline text-[10px] font-mono text-zinc-700">
+                Build #{builds.length > 0 ? builds[0]?.id : "—"}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-mono text-zinc-700 hidden sm:inline">
+                Uptime engine active
+              </span>
+              {dbTime && (
+                <span className="text-[10px] font-mono text-zinc-700">
+                  DB sync: {new Date(dbTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                </span>
+              )}
+              <span className="inline-flex items-center gap-1.5 text-[10px] font-mono text-zinc-600 bg-white/[0.03] border border-white/[0.05] px-2.5 py-1 rounded-md">
+                <span className="w-1.5 h-1.5 rounded-full bg-cyan-500 shadow-[0_0_5px_rgba(6,182,212,0.7)] animate-pulse" />
+                DAEMON RUNNING
+              </span>
+            </div>
+          </div>
+        </div>
+      </footer>
+
       {/* Logs Modal */}
       <BuildModal
         selectedBuild={selectedBuild}
@@ -545,12 +736,75 @@ function App() {
         API_BASE={API_BASE}
       />
 
-      {/* Internal Custom Scrollbar Styles for the builds list */}
+      {/* Custom Toast Notification Overlay */}
+      {toast && (
+        <div className="fixed bottom-6 right-6 z-50 animate-fade-in max-w-sm w-full bg-[#0a0a0c]/95 border border-white/[0.08] rounded-2xl p-4 shadow-2xl backdrop-blur-xl">
+          <div className="flex gap-3">
+            {toast.type === "confirm" ? (
+              <div className="w-8 h-8 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/20 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+            ) : toast.type === "error" ? (
+              <div className="w-8 h-8 rounded-lg bg-rose-500/10 text-rose-450 border border-rose-500/20 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            ) : (
+              <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center shrink-0">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+            )}
+            
+            <div className="flex-1">
+              <p className="text-xs font-mono text-zinc-300 leading-relaxed">{toast.message}</p>
+              
+              {toast.type === "confirm" ? (
+                <div className="flex gap-2 mt-3 justify-end">
+                  <button 
+                    onClick={() => setToast(null)}
+                    className="px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-white/5 border border-white/10 text-zinc-400 hover:text-zinc-200 hover:bg-white/10 transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    onClick={() => executeDeleteRepo(toast.repoId)}
+                    className="px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider bg-rose-600 border border-rose-500/30 text-white hover:bg-rose-500 transition-all shadow-[0_0_15px_rgba(220,38,38,0.3)] cursor-pointer"
+                  >
+                    Delete
+                  </button>
+                </div>
+              ) : (
+                <div className="flex justify-end mt-1">
+                  <button 
+                    onClick={() => setToast(null)}
+                    className="text-[9px] font-mono text-zinc-500 hover:text-zinc-400 transition-colors cursor-pointer"
+                  >
+                    dismiss
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       <style dangerouslySetInnerHTML={{__html: `
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.1); border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in {
+          animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
       `}} />
     </div>
   );

@@ -42,4 +42,21 @@ router.post("/", authenticateToken, async (req, res) => {
   }
 });
 
+// Delete repository (workspace) and cascade to builds
+router.delete("/:id", authenticateToken, async (req, res) => {
+  try {
+    const result = await pool.query(
+      "DELETE FROM repositories WHERE id = $1 AND user_id = $2 RETURNING *",
+      [req.params.id, req.user.id]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "Repository not found or unauthorized" });
+    }
+    res.json({ message: "Repository deleted successfully", repository: result.rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

@@ -1,12 +1,19 @@
-import React from 'react';
+import React, { useState } from 'react';
 
-export default function RepoList({ repos, selectedRepo, setSelectedRepo }) {
+export default function RepoList({ repos, selectedRepo, setSelectedRepo, onDeleteRepo }) {
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 5;
+
+  const totalPages = Math.ceil(repos.length / pageSize);
+  const activePage = Math.min(currentPage, Math.max(totalPages, 1));
+  const paginatedRepos = repos.slice((activePage - 1) * pageSize, activePage * pageSize);
+
   return (
     <div className="bg-white/[0.02] border border-white/[0.08] rounded-3xl p-6 backdrop-blur-xl shadow-xl flex-1 flex flex-col min-h-[300px]">
       <div className="flex justify-between items-center mb-5 border-b border-white/[0.05] pb-4">
         <h2 className="text-lg font-bold text-white flex items-center gap-2">
           <svg className="w-5 h-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
           </svg>
           Configured Workspaces
         </h2>
@@ -20,7 +27,7 @@ export default function RepoList({ repos, selectedRepo, setSelectedRepo }) {
               <p className="text-zinc-500 text-sm">No repositories connected.</p>
             </div>
           ) : (
-            repos.map((repo) => {
+            paginatedRepos.map((repo) => {
               const isSelected = selectedRepo?.id === repo.id;
               return (
                 <div 
@@ -54,14 +61,30 @@ export default function RepoList({ repos, selectedRepo, setSelectedRepo }) {
                       </a>
                     </div>
                   </div>
-                  <div className={`hidden sm:flex px-2.5 py-1 rounded-md border ${
-                    isSelected 
-                      ? 'bg-cyan-500/10 border-cyan-500/30' 
-                      : 'bg-white/5 border-white/5'
-                  }`}>
-                    <span className={`text-[10px] font-mono uppercase tracking-widest ${
-                      isSelected ? 'text-cyan-400 font-bold' : 'text-zinc-500'
-                    }`}>ID:{repo.id}</span>
+                  <div className="flex items-center gap-3">
+                    <div className={`hidden sm:flex px-2.5 py-1 rounded-md border ${
+                      isSelected 
+                        ? 'bg-cyan-500/10 border-cyan-500/30' 
+                        : 'bg-white/5 border-white/5'
+                    }`}>
+                      <span className={`text-[10px] font-mono uppercase tracking-widest ${
+                        isSelected ? 'text-cyan-400 font-bold' : 'text-zinc-500'
+                      }`}>ID:{repo.id}</span>
+                    </div>
+                    {onDeleteRepo && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDeleteRepo(repo);
+                        }}
+                        className="p-1.5 rounded-lg border border-rose-500/30 bg-rose-500/10 text-rose-450 hover:bg-rose-500 hover:text-white hover:border-rose-500 transition-all active:scale-95 flex items-center justify-center cursor-pointer"
+                        title="Delete Workspace"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -69,6 +92,50 @@ export default function RepoList({ repos, selectedRepo, setSelectedRepo }) {
           )}
         </div>
       </div>
+
+      {totalPages > 1 && (
+        <div className="flex justify-between items-center mt-5 pt-4 border-t border-white/[0.05] select-none text-xs text-zinc-500 font-mono">
+          <span>
+            Showing <strong className="text-zinc-300">{(activePage - 1) * pageSize + 1}</strong> to{" "}
+            <strong className="text-zinc-300">{Math.min(activePage * pageSize, repos.length)}</strong> of{" "}
+            <strong className="text-zinc-300">{repos.length}</strong>
+          </span>
+          
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+              disabled={activePage === 1}
+              className={`p-1.5 rounded-lg border transition-colors ${
+                activePage === 1
+                  ? 'border-white/5 text-zinc-700 cursor-not-allowed bg-transparent'
+                  : 'border-white/10 hover:border-cyan-500/30 hover:bg-cyan-500/5 text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+              </svg>
+            </button>
+            
+            <span className="text-zinc-450">
+              {activePage} / {totalPages}
+            </span>
+            
+            <button
+              onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+              disabled={activePage === totalPages}
+              className={`p-1.5 rounded-lg border transition-colors ${
+                activePage === totalPages
+                  ? 'border-white/5 text-zinc-700 cursor-not-allowed bg-transparent'
+                  : 'border-white/10 hover:border-cyan-500/30 hover:bg-cyan-500/5 text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
