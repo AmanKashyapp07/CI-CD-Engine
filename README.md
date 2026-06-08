@@ -4,7 +4,7 @@ A premium, high-performance, asynchronous CI/CD orchestration infrastructure des
 
 ---
 
-## 📖 The "Shared Book" Analogy
+## The "Shared Book" Analogy
 
 If you have never used cloud build services before, think of MagnusCI as a **Robotic Proofreader** for a book written by a collaborative team:
 * **The Push (The Alert)**: A writer saves a draft (code pushed to **GitHub**). A bell rings to alert the assistant (**Our Ingest Gateway**).
@@ -16,7 +16,7 @@ If you have never used cloud build services before, think of MagnusCI as a **Rob
 
 ---
 
-## ⚡ Key Features (Latest Version)
+## Key Features (Latest Version)
 
 * **Cryptographic Ingestion Gateway**: Exposes a secure, lightning-fast $O(1)$ Express endpoint verifying raw payloads via SHA-256 HMAC signatures (`X-Hub-Signature-256`) in under 30ms.
 * **DAG (Directed Acyclic Graph) Pipeline Coordinator**: Parses stage dependency trees inside `magnus-ci.json` (or language fallbacks) to execute compilation, linting, and testing stages concurrently or sequentially while detecting circular dependencies.
@@ -31,7 +31,7 @@ If you have never used cloud build services before, think of MagnusCI as a **Rob
 
 ---
 
-## 🏛️ Technical Architecture & Workflow
+## Technical Architecture & Workflow
 
 ```mermaid
 flowchart TD
@@ -48,7 +48,7 @@ flowchart TD
 
 ---
 
-## 📂 Repository Layout
+## Repository Layout
 
 ```text
 .
@@ -64,7 +64,6 @@ flowchart TD
 │       ├── queue.js               # BullMQ (Redis) Queue configuration
 │       ├── workspace.js           # Ephemeral workspace directory creators & sweepers
 │       ├── worker.js              # Background BullMQ job processor & Docker sandbox executor
-│       ├── test_webhook.js        # Script simulating GitHub push events with HMAC headers
 │       ├── middleware/
 │       │   └── authMiddleware.js  # Secures API endpoints via JWT session validation
 │       ├── routes/
@@ -114,7 +113,7 @@ flowchart TD
 
 ---
 
-## ⚙️ Getting Started
+## Getting Started
 
 ### Prerequisites
 * **Node.js** (v20+)
@@ -165,7 +164,7 @@ npm run dev
 
 ---
 
-## 🛠️ Advanced Pipeline Customization (`magnus-ci.json`)
+## Advanced Pipeline Customization (magnus-ci.json)
 
 To orchestrate complex workflows, you can place a `magnus-ci.json` configuration file at the root of your target repository:
 
@@ -193,32 +192,14 @@ To orchestrate complex workflows, you can place a `magnus-ci.json` configuration
 }
 ```
 * **Language Fallbacks**: If no configuration is present, the engine auto-detects toolchains (Node.js, Go, Python, Maven, Gradle, CMake, Make) and applies optimized baseline execution presets.
-* **Dependencies (`needs`)**: Defines graph nodes. In the configuration above, `lint` and `test` run in parallel once `setup` finishes. `compile` executes only after both quality checks pass.
+* **Dependencies (needs)**: Defines graph nodes. In the configuration above, `lint` and `test` run in parallel once `setup` finishes. `compile` executes only after both quality checks pass.
 
 ---
 
-## 🧪 Verification & Testing
-
-### Webhook & HMAC Verification
-To test the webhooks flow offline using cryptographic signatures:
-1. Ensure the backend is active on port `5001`.
-2. From the root directory, execute:
-   ```bash
-   node backend/src/test_webhook.js
-   ```
-3. The script calculates the HMAC hash using your secret, triggers a mock payload, and expects a `202 Accepted` response:
-   ```json
-   Calculated signature: sha256=8b1c5d612dda22ee13...
-   Response Status: 202
-   Response Body: {
-     "message": "Build triggered successfully",
-     "buildId": 50,
-     "status": "PENDING"
-   }
-   ```
+## Verification & Testing
 
 ### Manual Dashboard Audits
-1. Open [http://localhost:5173](http://localhost:5173).
+1. Open http://localhost:5173.
 2. Authenticate using GitHub OAuth.
 3. Register your repository URL (URLs are normalized automatically).
 4. Watch build processes execute:
